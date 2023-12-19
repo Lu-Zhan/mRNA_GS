@@ -4,6 +4,7 @@ import os
 import yaml
 import wandb
 import glob
+import pandas as pd
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -14,6 +15,7 @@ from torch.optim import Adam
 from datetime import datetime
 from PIL import Image
 from einops import rearrange, repeat
+from collections import OrderedDict
 
 
 def generate_2D_gaussian_splatting(kernel_size, sigma_x, sigma_y, rho, coords, colours, image_size=(256, 256, 3), device="cpu"):
@@ -152,13 +154,8 @@ def d_ssim_loss(img1, img2, window_size=11, size_average=True):
     return ssim(img1, img2, window_size, size_average).mean()
 
 
-def combined_loss(pred, target, lambda_param=0.5):
-    l1loss = nn.L1Loss()
-    return (1 - lambda_param) * l1loss(pred, target) + lambda_param * d_ssim_loss(pred, target)
-
-
-def our_loss(pred, target):
-    return torch.norm(pred - target, dim=1, p=2).mean()
+def l1loss(pred, target):
+    return nn.L1Loss()(pred, target)
 
 
 def give_required_data(input_coords, image_size):
@@ -174,6 +171,28 @@ def give_required_data(input_coords, image_size):
 
 #   return colour_values_tensor, coords
     return coords
+
+
+def read_codebook(path):
+    df = pd.read_excel(path)
+    array = df.values   # array(["'Acta2'", 0, 0, 0, 0, 1, 0, 0, 1, 1, 0, 1, 0, 1, 0, 0], dtype=object)
+
+    codebook = [
+        np.array(x[1:], dtype=np.float32) for x in array
+    ]
+
+    return np.stack(codebook, axis=0)   # (181, 15)
+
+
+def codeloss(pred_code, codebook):
+    simi = pred_code @ codebook.T  # (num_samples, 15) @ (15, 181) = (num_samples, 181)
+
+    simi = simi / torch.norm(pred_code, dim=-1, keepdim=True) / torch.norm(codebook, dim=-1, keepdim=True).T
+
+    
+    min_dist = 1 - simi.max(dim=-1)[0]  # (num_samples, )
+
+    return min_dist.mean()
 
 
 if __name__ == "__main__":
@@ -203,12 +222,21 @@ if __name__ == "__main__":
     gauss_threshold = config["gaussian_threshold"]
     display_loss = config["display_loss"]
     gpu_id = config["gpu_id"]
+    codebook_path = config["codebook_path"]
+    report_interval = config["report_interval"]
+    w_ssim = config["w_ssim"]
+    w_code = config["w_code"]
 
-    """## Prepate the points ##"""
     device = torch.device(f'cuda:{gpu_id}' if torch.cuda.is_available() else 'cpu')
+
+    # Read the codebook
+    codebook = read_codebook(codebook_path) # (181, 15)
+    codebook = torch.tensor(codebook, device=device)
+
+    # prepare points
     num_samples = primary_samples + backup_samples
 
-    PADDING = kernal_size // 2
+    padding = kernal_size // 2
     image_path = image_file_name
 
     # read 15 images (single channel) and stack them into a 3D tensor (h, w, 15)
@@ -296,10 +324,20 @@ if __name__ == "__main__":
         # colours_with_alpha = colours * alpha.view(batch_size, 1)
         colours_with_alpha = alpha
         g_tensor_batch = generate_2D_gaussian_splatting(kernal_size, sigma_x, sigma_y, rho, pixel_coords, colours_with_alpha, image_size, device)
-        loss = combined_loss(g_tensor_batch, target_tensor, lambda_param=0.5)
+
+        l1_loss = l1loss(g_tensor_batch, target_tensor)
+        ssim_loss = d_ssim_loss(g_tensor_batch, target_tensor)
+        code_loss = codeloss(alpha, codebook)
+
+        loss = l1_loss
+
+        if w_ssim > 0:
+            loss += w_ssim * ssim_loss
+        
+        if w_code > 0:
+            loss += w_code * code_loss
 
         optimizer.zero_grad()
-
         loss.backward()
 
         # Apply zeroing out of gradients at every epoch
@@ -405,12 +443,18 @@ if __name__ == "__main__":
             # logging
             wandb.log({
                 "view/recon": [wandb.Image(v, caption=f"recon_gt_{i // 2}") for i, v in enumerate(views)],
-                "train/total_loss": loss.item(),
-                "params/num_points": len(output),
                 "view/position_images": position_images,
                 "view/all_position": all_position,
             }, step=epoch)
 
         
-        print(f"epoch: {epoch}, loss: {loss.item()}, num: {len(output)}")
+        if epoch % report_interval == 0:
+            wandb.log({
+                "train/total_loss": loss.item(),
+                "train/l1_loss": l1_loss.item(),
+                "train/ssim_loss": ssim_loss.item(),
+                "train/code_loss": code_loss.item(),
+                "params/num_points": len(output),
+            }, step=epoch)
+            print(f"epoch: {epoch}, loss: {loss.item()}, num: {len(output)}")
 
