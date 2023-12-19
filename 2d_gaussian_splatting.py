@@ -190,7 +190,7 @@ if __name__ == "__main__":
     )
 
     # Extract values from the loaded config
-    KERNEL_SIZE = config["KERNEL_SIZE"]
+    kernal_size = config["kernal_size"]
     image_size = tuple(config["image_size"])
     primary_samples = config["primary_samples"]
     backup_samples = config["backup_samples"]
@@ -208,7 +208,7 @@ if __name__ == "__main__":
     device = torch.device(f'cuda:{gpu_id}' if torch.cuda.is_available() else 'cpu')
     num_samples = primary_samples + backup_samples
 
-    PADDING = KERNEL_SIZE // 2
+    PADDING = kernal_size // 2
     image_path = image_file_name
 
     # read 15 images (single channel) and stack them into a 3D tensor (h, w, 15)
@@ -295,8 +295,8 @@ if __name__ == "__main__":
 
         # colours_with_alpha = colours * alpha.view(batch_size, 1)
         colours_with_alpha = alpha
-        g_tensor_batch = generate_2D_gaussian_splatting(KERNEL_SIZE, sigma_x, sigma_y, rho, pixel_coords, colours_with_alpha, image_size, device)
-        loss = combined_loss(g_tensor_batch, target_tensor, lambda_param=0.2)
+        g_tensor_batch = generate_2D_gaussian_splatting(kernal_size, sigma_x, sigma_y, rho, pixel_coords, colours_with_alpha, image_size, device)
+        loss = combined_loss(g_tensor_batch, target_tensor, lambda_param=0.5)
 
         optimizer.zero_grad()
 
@@ -377,12 +377,25 @@ if __name__ == "__main__":
                 px = np.clip(px, 0, image_size[1] - 1)
                 py = np.clip(py, 0, image_size[0] - 1)
 
-                plt.scatter(-px, py, c='red', marker='x', alpha=alpha.data.cpu().numpy())
+                plt.scatter(-px, py, c='red', marker='x', alpha=alpha[:, idx].data.cpu().numpy())
                 plt.axis('off')
 
                 position_images.append(wandb.Image(plt, caption=f"image_{idx}"))
-                
-                break
+            
+            # all_position
+            plt.figure()
+            px = (pixel_coords.data.cpu().numpy()[:, 0] + 1) * 0.5 * image_size[1]
+            py = (pixel_coords.data.cpu().numpy()[:, 1] + 1) * 0.5 * image_size[0]
+            px = px.astype(np.int16)
+            py = py.astype(np.int16)
+
+            px = np.clip(px, 0, image_size[1] - 1)
+            py = np.clip(py, 0, image_size[0] - 1)
+
+            plt.scatter(-px, py, c='red', marker='x')
+            plt.axis('off')
+
+            all_position = wandb.Image(plt, caption="all_position")
 
             recon = repeat(g_tensor_batch, 'h w c -> c h w 3').data.cpu().numpy()
             gt = repeat(target_tensor, 'h w c -> c h w 3').data.cpu().numpy()
@@ -395,6 +408,7 @@ if __name__ == "__main__":
                 "train/total_loss": loss.item(),
                 "params/num_points": len(output),
                 "view/position_images": position_images,
+                "view/all_position": all_position,
             }, step=epoch)
 
         
