@@ -13,6 +13,7 @@ import torch.nn as nn
 from torch.optim import Adam
 from datetime import datetime
 from PIL import Image
+from einops import rearrange, repeat
 
 
 def generate_2D_gaussian_splatting(kernel_size, sigma_x, sigma_y, rho, coords, colours, image_size=(256, 256, 3), device="cpu"):
@@ -363,14 +364,18 @@ if __name__ == "__main__":
 
             # point positions
             position_images = []
-            for idx, recon in enumerate(g_tensor_batch.data.cpu().permute(2, 0, 1).numpy()):    # (15, h, w)
+            for idx, recon in enumerate(target_tensor.data.cpu().permute(2, 0, 1).numpy()):    # (15, h, w)
                 plt.figure()
+                recon = repeat(recon, 'h w -> h w 3')
                 plt.imshow(recon)
 
                 px = (pixel_coords.data.cpu().numpy()[:, 0] + 1) * 0.5 * image_size[1]
                 py = (pixel_coords.data.cpu().numpy()[:, 1] + 1) * 0.5 * image_size[0]
                 px = px.astype(np.int16)
                 py = py.astype(np.int16)
+
+                px = np.clip(px, 0, image_size[1] - 1)
+                py = np.clip(py, 0, image_size[0] - 1)
 
                 plt.scatter(-px, py, c='red', marker='x', alpha=alpha.data.cpu().numpy())
                 plt.axis('off')
@@ -379,13 +384,14 @@ if __name__ == "__main__":
                 
                 break
 
-            views = torch.stack([g_tensor_batch, target_tensor], dim=1) # (batch, 2, h, w, 3)
-            views = views.view(-1, *views.shape[1:])    # (batch*2, h, w, 3)
-            views = views.data.cpu().numpy()
+            recon = repeat(g_tensor_batch, 'h w c -> c h w 3').data.cpu().numpy()
+            gt = repeat(target_tensor, 'h w c -> c h w 3').data.cpu().numpy()
+            views = np.stack([recon, gt], axis=1)   # (15, 2, h, w, 3)
+            views = views.reshape(-1, *views.shape[2:])
 
             # logging
             wandb.log({
-                "view/recon": [wandb.Image(v, caption=f"recon_gt_{i}") for i, v in enumerate(views)],
+                "view/recon": [wandb.Image(v, caption=f"recon_gt_{i // 2}") for i, v in enumerate(views)],
                 "train/total_loss": loss.item(),
                 "params/num_points": len(output),
                 "view/position_images": position_images,
