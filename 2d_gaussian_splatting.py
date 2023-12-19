@@ -165,12 +165,11 @@ def give_required_data(input_coords, image_size):
     coords = (center_coords_normalized - coords) * 2.0
 
     # Fetching the colour of the pixels in each coordinates
-#   colour_values = [image_array[coord[1], coord[0]] for coord in input_coords]
-#   colour_values_np = np.array(colour_values)
-#   colour_values_tensor =  torch.tensor(colour_values_np, device=device).float()
+    colour_values = [image_array[coord[1], coord[0]] for coord in input_coords]
+    colour_values_np = np.array(colour_values)
+    colour_values_tensor = torch.tensor(colour_values_np, device=device).float()
 
-#   return colour_values_tensor, coords
-    return coords
+    return colour_values_tensor, coords
 
 
 def read_codebook(path):
@@ -224,6 +223,7 @@ if __name__ == "__main__":
     gpu_id = config["gpu_id"]
     codebook_path = config["codebook_path"]
     report_interval = config["report_interval"]
+    checkpoint_interval = config["checkpoint_interval"]
     w_ssim = config["w_ssim"]
     w_code = config["w_code"]
 
@@ -263,14 +263,13 @@ if __name__ == "__main__":
     pixels_np = np.array(pixels)
     random_pixels =  torch.tensor(pixels_np, device=device)
 
-    # colour_values, pixel_coords = give_required_data(coords, image_size)
-    pixel_coords = give_required_data(coords, image_size)
+    colour_values, pixel_coords = give_required_data(coords, image_size)
 
     pixel_coords = torch.atanh(pixel_coords)
 
     sigma_values = torch.rand(num_samples, 2, device=device)
     rho_values = 2 * torch.rand(num_samples, 1, device=device) - 1
-    alpha_values = torch.ones(num_samples, original_array.shape[-1], device=device)
+    alpha_values = torch.ones(num_samples, original_array.shape[-1], device=device) * colour_values
     # W_values = torch.cat([sigma_values, rho_values, alpha_values, colour_values, pixel_coords], dim=1)
     W_values = torch.cat([sigma_values, rho_values, alpha_values, pixel_coords], dim=1)
 
@@ -284,10 +283,10 @@ if __name__ == "__main__":
 
     # Create a directory with the current date and time as its name
     directory = f"./exps/{now}"
-    os.makedirs(directory, exist_ok=True)
+    os.makedirs(os.path.join(directory, "checkpoints"), exist_ok=True)
 
-    W = nn.Parameter(W_values)
-    optimizer = Adam([W], lr=learning_rate)
+    model_weights = nn.Parameter(W_values)
+    optimizer = Adam([model_weights], lr=learning_rate)
     loss_history = []
 
     """## Training Loop ##"""
@@ -295,7 +294,7 @@ if __name__ == "__main__":
 
         #find indices to remove and update the persistent mask
         if epoch % (densification_interval + 1) == 0 and epoch > 0:
-            indices_to_remove = (torch.sigmoid(W[:, 3]) < 0.01).nonzero(as_tuple=True)[0]
+            indices_to_remove = (torch.sigmoid(model_weights[:, 3]) < 0.01).nonzero(as_tuple=True)[0]
 
             if len(indices_to_remove) > 0:
                 print(f"number of pruned points: {len(indices_to_remove)}")
@@ -303,13 +302,13 @@ if __name__ == "__main__":
             persistent_mask[indices_to_remove] = False
 
             # Zero-out parameters and their gradients at every epoch using the persistent mask
-            W.data[~persistent_mask] = 0.0
+            model_weights.data[~persistent_mask] = 0.0
 
 
         gc.collect()
         # torch.cuda.empty_cache()
 
-        output = W[persistent_mask]
+        output = model_weights[persistent_mask]
 
         batch_size = output.shape[0]
 
@@ -342,12 +341,12 @@ if __name__ == "__main__":
 
         # Apply zeroing out of gradients at every epoch
         if persistent_mask is not None:
-            W.grad.data[~persistent_mask] = 0.0
+            model_weights.grad.data[~persistent_mask] = 0.0
 
         if epoch % densification_interval == 0 and epoch > 0:
             # Calculate the norm of gradients
-            gradient_norms = torch.norm(W.grad[persistent_mask][:, 7:9], dim=1, p=2)
-            gaussian_norms = torch.norm(torch.sigmoid(W.data[persistent_mask][:, 0:2]), dim=1, p=2)
+            gradient_norms = torch.norm(model_weights.grad[persistent_mask][:, 7:9], dim=1, p=2)
+            gaussian_norms = torch.norm(torch.sigmoid(model_weights.data[persistent_mask][:, 0:2]), dim=1, p=2)
 
             sorted_grads, sorted_grads_indices = torch.sort(gradient_norms, descending=True)
             sorted_gauss, sorted_gauss_indices = torch.sort(gaussian_norms, descending=True)
@@ -368,10 +367,10 @@ if __name__ == "__main__":
                 start_index = current_marker + 1
                 end_index = current_marker + 1 + len(common_indices)
                 persistent_mask[start_index: end_index] = True
-                W.data[start_index:end_index, :] = W.data[common_indices, :]
+                model_weights.data[start_index:end_index, :] = model_weights.data[common_indices, :]
                 scale_reduction_factor = 1.6
-                W.data[start_index:end_index, 0:2] /= scale_reduction_factor
-                W.data[common_indices, 0:2] /= scale_reduction_factor
+                model_weights.data[start_index:end_index, 0:2] /= scale_reduction_factor
+                model_weights.data[common_indices, 0:2] /= scale_reduction_factor
                 current_marker = current_marker + len(common_indices)
 
             # Clone it points with large coordinate gradient and small gaussian values
@@ -380,7 +379,7 @@ if __name__ == "__main__":
                 start_index = current_marker + 1
                 end_index = current_marker + 1 + len(distinct_indices)
                 persistent_mask[start_index: end_index] = True
-                W.data[start_index:end_index, :] = W.data[distinct_indices, :]
+                model_weights.data[start_index:end_index, :] = model_weights.data[distinct_indices, :]
                 current_marker = current_marker + len(distinct_indices)
 
         optimizer.step()
@@ -457,4 +456,7 @@ if __name__ == "__main__":
                 "params/num_points": len(output),
             }, step=epoch)
             print(f"epoch: {epoch}, loss: {loss.item()}, num: {len(output)}")
+
+        if epoch % checkpoint_interval == 0 and epoch > 0:
+            torch.save(model_weights, os.path.join(directory, 'checkpoints', f"ckpt_{epoch}.pth"))
 
