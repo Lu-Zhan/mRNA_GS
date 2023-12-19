@@ -2,7 +2,7 @@ kernal_size: 25
 image_size: [120, 120, 3]
 primary_samples: 200
 backup_samples: 1000
-num_epochs: 4001
+num_epochs: 10001
 densification_interval: 300
 learning_rate: 0.008
 image_file_name: "/media/mldadmin/home/s122mdg39_05/Projects_mrna/data/1213_demo_data_v2/raw1_cropped"
@@ -10,11 +10,11 @@ codebook_path: "/media/mldadmin/home/s122mdg39_05/Projects_mrna/data/1213_demo_d
 gradient_threshold: 0.002
 gaussian_threshold: 0.002
 display_loss: False
-run_name: "no_code"
+run_name: "code=1_ks=25"
 gpu_id: 3
 w_ssim: 0.25
-w_code: 10
+w_code: 1
 
-display_interval: 50
+display_interval: 100
 report_interval: 20
 checkpoint_interval: 500

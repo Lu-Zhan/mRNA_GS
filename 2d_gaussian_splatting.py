@@ -4,6 +4,7 @@ import os
 import yaml
 import wandb
 import glob
+import tqdm
 import pandas as pd
 
 import numpy as np
@@ -290,7 +291,7 @@ if __name__ == "__main__":
     loss_history = []
 
     """## Training Loop ##"""
-    for epoch in range(num_epochs):
+    for epoch in tqdm.trange(num_epochs):
 
         #find indices to remove and update the persistent mask
         if epoch % (densification_interval + 1) == 0 and epoch > 0:
@@ -429,7 +430,7 @@ if __name__ == "__main__":
             px = np.clip(px, 0, image_size[1] - 1)
             py = np.clip(py, 0, image_size[0] - 1)
 
-            plt.scatter(-px, py, c='red', marker='x')
+            plt.scatter(-px, -py, c='red', marker='x')
             plt.axis('off')
 
             all_position = wandb.Image(plt, caption="all_position")
@@ -455,8 +456,9 @@ if __name__ == "__main__":
                 "train/code_loss": code_loss.item(),
                 "params/num_points": len(output),
             }, step=epoch)
-            print(f"epoch: {epoch}, loss: {loss.item()}, num: {len(output)}")
+            # print(f"epoch: {epoch}, loss: {loss.item()}, num: {len(output)}")
 
         if epoch % checkpoint_interval == 0 and epoch > 0:
             torch.save(model_weights, os.path.join(directory, 'checkpoints', f"ckpt_{epoch}.pth"))
+            torch.save(persistent_mask, os.path.join(directory, 'checkpoints', f"mask_{epoch}.pth"))
 
