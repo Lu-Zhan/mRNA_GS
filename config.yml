@@ -1,20 +1,23 @@
-kernal_size: 25
+kernal_size: 30
 image_size: [120, 120, 3]
 primary_samples: 200
-backup_samples: 1000
-num_epochs: 10001
+backup_samples: 500
+num_epochs: 4001
 densification_interval: 300
 learning_rate: 0.008
-image_file_name: "/media/mldadmin/home/s122mdg39_05/Projects_mrna/data/1213_demo_data_v2/raw1_cropped"
+# image_file_name: "/media/mldadmin/home/s122mdg39_05/Projects_mrna/data/1213_demo_data_v2/raw1_cropped"
+image_file_name: "/media/mldadmin/home/s122mdg39_05/Projects_mrna/data/1228_2d_data_crop"
 codebook_path: "/media/mldadmin/home/s122mdg39_05/Projects_mrna/data/1213_demo_data_v2/codebook.xlsx"
 gradient_threshold: 0.002
 gaussian_threshold: 0.002
 display_loss: False
-run_name: "code=1_ks=25"
+run_name: "try"
 gpu_id: 3
-w_ssim: 0.25
-w_code: 1
 
-display_interval: 100
+w_ssim: 0.5
+w_code: 0
+w_circle: 0.1
+
+display_interval: 200
 report_interval: 20
 checkpoint_interval: 500

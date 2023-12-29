@@ -6,7 +6,6 @@ import wandb
 import glob
 import tqdm
 import pandas as pd
-
 import numpy as np
 import matplotlib.pyplot as plt
 import torch.nn.functional as F
@@ -19,12 +18,23 @@ from einops import rearrange, repeat
 from collections import OrderedDict
 
 
-def generate_2D_gaussian_splatting(kernel_size, sigma_x, sigma_y, rho, coords, colours, image_size=(256, 256, 3), device="cpu"):
+def generate_2D_gaussian_splatting(
+        kernel_size, 
+        sigma_x, 
+        sigma_y, 
+        rho, 
+        coords, 
+        colours, 
+        image_size=(256, 256, 3), 
+        device="cpu"
+    ):
     batch_size = colours.shape[0]
 
     sigma_x = sigma_x.view(batch_size, 1, 1)
     sigma_y = sigma_y.view(batch_size, 1, 1)
     rho = rho.view(batch_size, 1, 1)
+
+    # rho = torch.zeros(batch_size, 1, 1, device=device)
 
     covariance = torch.stack(
         [torch.stack([sigma_x**2, rho*sigma_x*sigma_y], dim=-1),
@@ -210,7 +220,7 @@ if __name__ == "__main__":
 
     # Extract values from the loaded config
     kernal_size = config["kernal_size"]
-    image_size = tuple(config["image_size"])
+    image_size = list(config["image_size"])
     primary_samples = config["primary_samples"]
     backup_samples = config["backup_samples"]
     num_epochs = config["num_epochs"]
@@ -227,12 +237,13 @@ if __name__ == "__main__":
     checkpoint_interval = config["checkpoint_interval"]
     w_ssim = config["w_ssim"]
     w_code = config["w_code"]
+    w_circle = config["w_circle"]
 
     device = torch.device(f'cuda:{gpu_id}' if torch.cuda.is_available() else 'cpu')
 
     # Read the codebook
-    codebook = read_codebook(codebook_path) # (181, 15)
-    codebook = torch.tensor(codebook, device=device)
+    codebook = read_codebook(codebook_path) # (181, 15) numpy array cpu
+    codebook = torch.tensor(codebook, device=device)    # tensor 
 
     # prepare points
     num_samples = primary_samples + backup_samples
@@ -241,19 +252,29 @@ if __name__ == "__main__":
     image_path = image_file_name
 
     # read 15 images (single channel) and stack them into a 3D tensor (h, w, 15)
-    image_paths = glob.glob(os.path.join(image_file_name, '*.png'))
+    image_paths = [os.path.join(image_file_name, f'F1_R{r}_Ch{c}.png') for r in range(1, 6) for c in range(2, 5)] 
     image_paths.sort()
 
     images = []
 
     for image_path in image_paths:
         image = Image.open(image_path).convert('L')
-        image = image.resize((image_size[0],image_size[0]))
+
+        ori_size = image.size
+
+        image_size[0] = ori_size[0] if ori_size[0] < image_size[0] else image_size[0]
+        image_size[1] = ori_size[1] if ori_size[1] < image_size[1] else image_size[1]
+
+        image = image.resize((image_size[0],image_size[1]))
         image = np.array(image)
-        image = image / 255.0
+        image = image / 65536
         images.append(image)
     
-    original_array = np.stack(images, axis=-1)  # (h, w, 15) 
+    original_array = np.stack(images, axis=-1)  # (h, w, 15)
+
+    print('max value:', original_array.max(), 'min value:', original_array.min())
+    original_array = (original_array - original_array.min()) / (original_array.max() * 1.6 - original_array.min())
+
     width, height, _ = original_array.shape  
 
     image_array = original_array
@@ -272,7 +293,7 @@ if __name__ == "__main__":
     rho_values = 2 * torch.rand(num_samples, 1, device=device) - 1
     alpha_values = torch.ones(num_samples, original_array.shape[-1], device=device) * colour_values
     # W_values = torch.cat([sigma_values, rho_values, alpha_values, colour_values, pixel_coords], dim=1)
-    W_values = torch.cat([sigma_values, rho_values, alpha_values, pixel_coords], dim=1)
+    W_values = torch.cat([sigma_values, rho_values, alpha_values, pixel_coords], dim=1) # (num_samples, 19)
 
     starting_size = primary_samples
     left_over_size = backup_samples
@@ -287,7 +308,9 @@ if __name__ == "__main__":
     os.makedirs(os.path.join(directory, "checkpoints"), exist_ok=True)
 
     model_weights = nn.Parameter(W_values)
+
     optimizer = Adam([model_weights], lr=learning_rate)
+
     loss_history = []
 
     """## Training Loop ##"""
@@ -325,9 +348,11 @@ if __name__ == "__main__":
         colours_with_alpha = alpha
         g_tensor_batch = generate_2D_gaussian_splatting(kernal_size, sigma_x, sigma_y, rho, pixel_coords, colours_with_alpha, image_size, device)
 
+        # loss
         l1_loss = l1loss(g_tensor_batch, target_tensor)
         ssim_loss = d_ssim_loss(g_tensor_batch, target_tensor)
         code_loss = codeloss(alpha, codebook)
+        circle_loss = torch.nn.functional.mse_loss(sigma_x, sigma_y)
 
         loss = l1_loss
 
@@ -336,6 +361,9 @@ if __name__ == "__main__":
         
         if w_code > 0:
             loss += w_code * code_loss
+
+        if w_circle > 0:
+            loss += w_circle * circle_loss
 
         optimizer.zero_grad()
         loss.backward()
@@ -346,7 +374,7 @@ if __name__ == "__main__":
 
         if epoch % densification_interval == 0 and epoch > 0:
             # Calculate the norm of gradients
-            gradient_norms = torch.norm(model_weights.grad[persistent_mask][:, 7:9], dim=1, p=2)
+            gradient_norms = torch.norm(model_weights.grad[persistent_mask][:, -2:0], dim=1, p=2)
             gaussian_norms = torch.norm(torch.sigmoid(model_weights.data[persistent_mask][:, 0:2]), dim=1, p=2)
 
             sorted_grads, sorted_grads_indices = torch.sort(gradient_norms, descending=True)
@@ -386,20 +414,6 @@ if __name__ == "__main__":
         optimizer.step()
 
         if epoch % display_interval == 0:
-            # # cdf curve
-            # sorted_data = np.sort(alpha.data.cpu().numpy(), axis=0)
-            # cdf = np.arange(1, len(sorted_data) + 1)
-
-            # plt.figure(figsize=(8, 5))
-            # plt.plot(cdf, sorted_data, marker='.', linestyle='none')
-            # plt.xlabel('Alpha')
-            # plt.ylabel('Number')
-            # plt.xticks(np.arange(0, len(sorted_data) + 50, 50))  # Adjust the range and interval as needed
-            # plt.yticks(np.arange(0, 1.1, 0.1))  # Adjust the range and interval as needed
-            # plt.grid(True)
-
-            # cdf = wandb.Image(plt, caption="cdf")
-
             # point positions
             position_images = []
             for idx, recon in enumerate(target_tensor.data.cpu().permute(2, 0, 1).numpy()):    # (15, h, w)
@@ -454,6 +468,7 @@ if __name__ == "__main__":
                 "train/l1_loss": l1_loss.item(),
                 "train/ssim_loss": ssim_loss.item(),
                 "train/code_loss": code_loss.item(),
+                "train/circle_loss": circle_loss.item(),
                 "params/num_points": len(output),
             }, step=epoch)
             # print(f"epoch: {epoch}, loss: {loss.item()}, num: {len(output)}")

@@ -206,7 +206,7 @@ if __name__ == "__main__":
     backup_samples = config["backup_samples"]
     image_file_name = config["image_file_name"]
 
-    exp_dir = "exps/2021_08_04-16_00_00"
+    exp_dir = "exps/2023_12_20-05_29_10"
 
     # padding = kernal_size // 2
     image_path = image_file_name
@@ -227,10 +227,10 @@ if __name__ == "__main__":
     original_array = np.stack(images, axis=-1)  # (h, w, 15) 
     width, height, _ = original_array.shape 
 
-    model_weights = torch.load(os.path.join(exp_dir, 'ckpt_4000.pth'))
-    persistent_mask = torch.load(os.path.join(exp_dir, 'mask_4000.pth'))
+    model_weights = torch.load(os.path.join(exp_dir, 'checkpoints/ckpt_10000.pth'))
+    persistent_mask = torch.load(os.path.join(exp_dir, 'checkpoints/mask_10000.pth'))
 
-    save_folder = os.path.join(oos.path.join(exp_dir, 'images'))
+    save_folder = os.path.join(os.path.join(exp_dir, 'images'))
     os.makedirs(save_folder, exist_ok=True)
 
     output = model_weights[persistent_mask]
@@ -257,10 +257,47 @@ if __name__ == "__main__":
         px = np.clip(px, 0, image_size[1] - 1)
         py = np.clip(py, 0, image_size[0] - 1)
 
-        plt.scatter(-px, -py, c='red', marker='x', alpha=alpha[:, idx].data.cpu().numpy())
+        plt.scatter(-px + image_size[1], -py + image_size[0], c='red', marker='x', alpha=alpha[:, idx].data.cpu().numpy())
         plt.axis('off')
 
         plt.savefig(os.path.join(save_folder, f'position_{idx}.png'), bbox_inches='tight')
+
+
+        plt.figure()
+        # recon = repeat(recon, 'h w -> h w 3')
+        plt.imshow(recon)
+
+        # px = (pixel_coords.data.cpu().numpy()[:, 0] + 1) * 0.5 * image_size[1]
+        # py = (pixel_coords.data.cpu().numpy()[:, 1] + 1) * 0.5 * image_size[0]
+        # px = px.astype(np.int16)
+        # py = py.astype(np.int16)
+
+        # px = np.clip(px, 0, image_size[1] - 1)
+        # py = np.clip(py, 0, image_size[0] - 1)
+
+        plt.scatter(-px, -py + image_size[0], c='red', marker='x', alpha=alpha[:, idx].data.cpu().numpy())
+        plt.axis('off')
+
+        plt.savefig(os.path.join(save_folder, f'cross_{idx}.png'), bbox_inches='tight')
+
+
+        plt.figure()
+        plt.imshow(recon)
+
+        current_alpha = alpha[:, idx].data.cpu().numpy()
+
+        current_alpha_median = np.median(current_alpha)
+        current_alpha_mean = np.mean(current_alpha)
+        print(current_alpha_median, current_alpha_mean)
+        current_alpha_mean = 0.13
+
+        current_alpha[current_alpha < current_alpha_mean] = 0
+        current_alpha[current_alpha >= current_alpha_mean] = 1
+
+        plt.scatter(-px, -py + image_size[0], c='red', marker='x', alpha=current_alpha)
+        plt.axis('off')
+
+        plt.savefig(os.path.join(save_folder, f'th_mean_{idx}.png'), bbox_inches='tight')
 
 
 
