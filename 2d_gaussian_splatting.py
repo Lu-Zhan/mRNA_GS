@@ -318,7 +318,8 @@ if __name__ == "__main__":
 
         #find indices to remove and update the persistent mask
         if epoch % (densification_interval + 1) == 0 and epoch > 0:
-            indices_to_remove = (torch.sigmoid(model_weights[:, 3]) < 0.01).nonzero(as_tuple=True)[0]
+            # if avg alpha is less than 0.01, remove the point
+            indices_to_remove = (torch.sigmoid(model_weights[:, 3:-2]).max(dim=-1) < 0.01).nonzero(as_tuple=True)[0] 
 
             if len(indices_to_remove) > 0:
                 print(f"number of pruned points: {len(indices_to_remove)}")
@@ -374,7 +375,7 @@ if __name__ == "__main__":
 
         if epoch % densification_interval == 0 and epoch > 0:
             # Calculate the norm of gradients
-            gradient_norms = torch.norm(model_weights.grad[persistent_mask][:, -2:0], dim=1, p=2)
+            gradient_norms = torch.norm(model_weights.grad[persistent_mask][:, -2:], dim=1, p=2)
             gaussian_norms = torch.norm(torch.sigmoid(model_weights.data[persistent_mask][:, 0:2]), dim=1, p=2)
 
             sorted_grads, sorted_grads_indices = torch.sort(gradient_norms, descending=True)
